@@ -685,7 +685,16 @@ class StreamingResponseOrchestrator:
 
             if choice.message.tool_calls and self.ctx.response_tools:
                 for tool_call in choice.message.tool_calls:
-                    if is_function_tool_call(tool_call, self.ctx.response_tools):
+                    is_mcp_tool = tool_call.function.name and tool_call.function.name in self.mcp_tool_to_server
+                    is_builtin_tool = tool_call.function.name in ("web_search", "knowledge_search")
+                    is_function_tool = is_function_tool_call(tool_call, self.ctx.response_tools)
+                    if is_function_tool:
+                        function_tool_calls.append(tool_call)
+                    elif not is_mcp_tool and not is_builtin_tool:
+                        logger.warning(
+                            f"Tool call '{tool_call.function.name}' does not match any registered tool. "
+                            "Treating as function tool call for client-side handling."
+                        )
                         function_tool_calls.append(tool_call)
                     elif (
                         tool_call.function

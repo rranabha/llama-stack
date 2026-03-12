@@ -537,6 +537,67 @@ async def test_create_openai_response_with_tool_call_type_none(openai_responses_
     assert completed_chunk.response.output[0].name == "get_weather"
 
 
+async def test_unrecognized_tool_call_returned_to_client(openai_responses_impl, mock_inference_api):
+    """Test that a tool call with an unrecognized name is returned to the client
+    as a function_call instead of crashing the server."""
+    input_text = "Sort the file by line"
+    model = "meta-llama/Llama-3.1-8B-Instruct"
+
+    # Model hallucinates a tool name with a special token leak
+    async def fake_stream_hallucinated_tool():
+        yield ChatCompletionChunk(
+            id="123",
+            choices=[
+                Choice(
+                    index=0,
+                    delta=ChoiceDelta(
+                        tool_calls=[
+                            ChoiceDeltaToolCall(
+                                index=0,
+                                id="tc_bad",
+                                function=ChoiceDeltaToolCallFunction(
+                                    name="sort<|channel|>", arguments='{"file":"report.txt"}'
+                                ),
+                                type=None,
+                            )
+                        ]
+                    ),
+                ),
+            ],
+            created=1,
+            model=model,
+            object="chat.completion.chunk",
+        )
+
+    mock_inference_api.openai_chat_completion.return_value = fake_stream_hallucinated_tool()
+
+    # Register a real function tool (sort, without the special token)
+    result = await openai_responses_impl.create_openai_response(
+        input=input_text,
+        model=model,
+        stream=True,
+        tools=[
+            OpenAIResponseInputToolFunction(
+                name="sort",
+                description="Sort a file by line",
+                parameters={"file": "string"},
+            )
+        ],
+    )
+
+    chunks = [chunk async for chunk in result]
+
+    # Should complete without raising ValueError
+    event_types = [chunk.type for chunk in chunks]
+    assert "response.completed" in event_types
+
+    # The hallucinated tool call should be returned as a function_call output item
+    completed_chunk = chunks[-1]
+    assert len(completed_chunk.response.output) == 1
+    assert completed_chunk.response.output[0].type == "function_call"
+    assert completed_chunk.response.output[0].name == "sort<|channel|>"
+
+
 async def test_create_openai_response_with_tool_call_function_arguments_none(openai_responses_impl, mock_inference_api):
     """Test creating an OpenAI response with tool calls that omit arguments."""
 
